@@ -57,7 +57,16 @@ docker-compose.yml
 README.md                 Design write-up (tie-break reasoning, concurrency approach, queue policy with examples)
 ```
 
-Dependency direction: `Api → Application → Domain`; `Infrastructure → Application, Domain`; `Api` wires `Infrastructure` via DI.
+Dependency direction (project references):
+
+```
+Domain         → (nothing)
+Application    → Domain
+Infrastructure → Application, Domain   (implements Application's interfaces)
+Api            → Application, Infrastructure   (Infrastructure only for DI registration in the composition root)
+```
+
+Application never references Infrastructure.
 
 ---
 

@@ -27,7 +27,7 @@ tests/AssignHub.UnitTests/         domain rules, no DB
 tests/AssignHub.IntegrationTests/  real SQL Server via Testcontainers
 ```
 
-`Api → Application → Domain`. `Infrastructure → Application, Domain`. Domain references nothing.
+`Api → Application, Infrastructure` (Infrastructure only for DI registration). `Infrastructure → Application, Domain`. `Application → Domain`. Domain references nothing, and Application never references Infrastructure.
 
 **Rich domain model (SPEC §4.5).** Entities have private setters, are created through factories (`Expert.Create`, `Request.Create`) and change state only through their own methods. Application code orchestrates and never sets entity state. The one exception is assign and close: they stay as conditional SQL updates (§6.1, §9.1). Never add `Expert.Assign()` or `Request.Close()` + `SaveChanges`.
 
