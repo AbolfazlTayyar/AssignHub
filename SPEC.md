@@ -20,6 +20,8 @@ Build an HTTP API that:
 - Notifications (email, SMS, push)
 - Editing or cancelling requests (lifecycle is `Pending → Assigned → Closed` only)
 - Deleting experts (use deactivation instead)
+- Editing experts (name, capacity, specialties): dropped for simplicity. Experts can only be created, activated and deactivated
+- Filtering, paging and queue-inspection endpoints: dropped for simplicity
 - Reassigning requests between experts
 
 ---
@@ -45,7 +47,7 @@ Build an HTTP API that:
 AssignHub.sln
 src/
   AssignHub.Domain/           Entities, enums, pure rules: ExpertSelector (ratio + tie-break), QueuePolicy (aging)
-  AssignHub.Application/      Use cases: CreateRequest, CloseRequest, CreateExpert, UpdateExpert, DrainQueue; DTOs; validation
+  AssignHub.Application/      Use cases: CreateRequest, CloseRequest, CreateExpert, ActivateExpert, DeactivateExpert, DrainQueue; DTOs; validation
   AssignHub.Infrastructure/   EF Core DbContext, configurations, Persian enum converters, migrations, SQL for atomic assignment
   AssignHub.Api/              Controllers, DI, `ApiResponse<T>` envelope, Swagger, QueueSweeper (BackgroundService), dev seeding
 tests/
@@ -118,8 +120,7 @@ The API uses the English names. The database stores the Persian values as `nvarc
 
 - `UX_Requests_RequestKey`: unique on `RequestKey`. This is the idempotency guarantee across instances.
 - `CK_Experts_Capacity`: `Capacity BETWEEN 1 AND 1000`.
-- `CK_Experts_OpenCount`: `OpenCount >= 0`.
-  - There is deliberately **no** `OpenCount <= Capacity` check, because capacity may be lowered below the current load (§7.3). The "never exceed" guarantee is enforced on assignment (§6.1).
+- `CK_Experts_OpenCount`: `OpenCount >= 0`. The "never exceed capacity" guarantee is enforced on assignment (§6.1).
 - `CK_Requests_ExpertWhenAssigned`: if `Status` is `واگذار شده` or `بسته شده` then `ExpertId IS NOT NULL`.
 - `IX_Requests_Queue`: filtered index on `(Subject, CreatedAt, Id) INCLUDE (Priority) WHERE Status = N'در انتظار'`.
 - `IX_Requests_Expert_Status`: on `(ExpertId, Status)`.
@@ -288,9 +289,13 @@ Notes:
 | Request created | `{request.Subject}` |
 | Request closed | the expert's specialties |
 | Expert created | its specialties |
-| Expert updated: capacity raised, specialties changed, or activated | its (new) specialties |
+| Expert activated | its specialties |
 
-**Background:** `QueueSweeper` (`BackgroundService`) runs `DrainQueue(all subjects)` every `SweepInterval` (default **30 s**). It is a safety net for crashes between commit and inline drain, and for aging transitions. It runs on every instance. That is safe because `TryAssign` is idempotent and concurrency-safe. Exceptions are logged and never crash the host.
+**Recovery:** `QueueSweeper` (`BackgroundService`) runs `DrainQueue(all subjects)` every `SweepInterval` (default **30 s**). It is not a trigger in its own right. It recovers from an inline drain that never ran or failed, for example when an instance crashes after committing a close but before draining. Without it, the head of the queue would wait while a suitable expert is free, until the next event for that subject. Aging needs no sweeper, because it is evaluated at drain time.
+
+- It runs on every instance. That is safe because `TryAssign` is idempotent and concurrency-safe.
+- `SweepInterval` is its only setting.
+- Exceptions are logged and never crash the host.
 
 ---
 
@@ -304,15 +309,7 @@ The expert is excluded from new assignments. Existing `Assigned` requests stay w
 
 Triggers a drain for the expert's specialties.
 
-### 8.3 Lowering capacity below `OpenCount`
-
-This is allowed. Example: 6 open and capacity set to 4. No requests are removed. The expert receives nothing new until `OpenCount < Capacity`, which happens after 3 closes. Their ratio is above 1, so they are never eligible meanwhile.
-
-### 8.4 Changing specialties
-
-Already-assigned requests are unaffected. Only future eligibility changes.
-
-### 8.5 Fields clients cannot set
+### 8.3 Fields clients cannot set
 
 `OpenCount` and `LastAssignedAt` are not client-settable.
 
@@ -340,7 +337,6 @@ public record ApiResponse<T>(bool IsSuccess, T? Data, List<string> Errors);
 
 - `errors` is a plain list of human-readable messages. There are no error codes or per-field dictionaries.
 - HTTP status codes are still set normally (200, 201, 400, 404, 409, 500), so clients can rely on either.
-- Paged lists put `{ items, page, pageSize, totalCount }` in `data`.
 - Two small hooks keep every response in this shape:
   - **Model-validation failures:** `InvalidModelStateResponseFactory` returns a 400 envelope that collects the messages.
   - **Unhandled exceptions:** one exception-handling middleware returns a 500 envelope with `"An unexpected error occurred."` and logs the details.
@@ -351,8 +347,6 @@ public record ApiResponse<T>(bool IsSuccess, T? Data, List<string> Errors);
 |---|---|---|---|
 | POST | `/requests` | `CreateRequestDto` | 201 new · 200 idempotent replay · 409 key/payload conflict · 400 |
 | GET | `/requests/{id}` | | 200 · 404 |
-| GET | `/requests` | `?status=&subject=&priority=&expertId=&page=1&pageSize=20` (max 100) | 200 paged |
-| GET | `/requests/queue` | `?subject=` | 200: Pending requests in effective queue order, with `effectivelyUrgent` flag |
 | POST | `/requests/{id}/close` | | 200 closed (also 200 if already `Closed`: idempotent retry) · 409 if `Pending` · 404 |
 
 ```jsonc
@@ -377,9 +371,8 @@ Commit, then drain. If step 1 affects 0 rows, re-read the request: if `Closed` �
 | Method | Path | Body | Responses |
 |---|---|---|---|
 | POST | `/experts` | `{ name, capacity, specialties: ["Legal", …], isActive }` | 201 · 400 |
-| GET | `/experts` | `?subject=&isActive=` | 200 |
+| GET | `/experts` | | 200 |
 | GET | `/experts/{id}` | | 200 · 404 |
-| PUT | `/experts/{id}` | `{ name, capacity, specialties, isActive }` | 200 · 400 · 404 |
 | POST | `/experts/{id}/activate` | | 200 · 404 |
 | POST | `/experts/{id}/deactivate` | | 200 · 404 |
 
@@ -415,7 +408,6 @@ Migrations are applied on startup when enabled. EF Core's built-in migration loc
 - The task example (2/4 vs 3/10 → second expert).
 - Each tie-break level in isolation.
 - Inactive, full and wrong-specialty experts are excluded.
-- Over-capacity experts (ratio > 1) are excluded.
 - Exact ratio comparison, e.g. 1/3 vs 2/6 is a tie.
 
 **QueuePolicy**
@@ -453,11 +445,10 @@ Migrations are applied on startup when enabled. EF Core's built-in migration loc
 7. **Expert lifecycle:**
    - Deactivate keeps existing requests and stops new ones.
    - Activate drains the queue.
-   - Capacity raised drains the queue.
-   - Capacity cut below load drains naturally.
 8. **Concurrent closes:** many closes and creates interleaved. The invariant `OpenCount = count(Assigned for expert)` holds for every expert at the end.
-9. **Sweeper:**
-   - A Pending request left assignable (by inserting it directly into the DB) is assigned by `QueueSweeper` within one interval.
+9. **Sweeper recovery:**
+   - Simulate a missed inline drain by inserting a Pending request directly into the DB while a suitable expert has a free slot.
+   - `QueueSweeper` assigns it within one interval (`FakeTimeProvider`).
 
 ---
 
@@ -481,7 +472,7 @@ The README includes a demo script (curl) that fires parallel requests at both po
    - Alternatives considered: pessimistic locks, optimistic retry, distributed lock.
 4. **Queue policy with examples** (§7.1–7.3) and the starvation bound.
 5. Enum storage (Persian in the DB, English in the API).
-6. Known limitations and future work.
+6. **Simplifications and known limitations:** what was dropped for simplicity (filtering, paging and queue-inspection endpoints; editing experts) and why.
 
 ---
 
