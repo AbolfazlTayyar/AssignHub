@@ -46,7 +46,7 @@ Build an HTTP API that:
 ```
 AssignHub.sln
 src/
-  AssignHub.Domain/           Entities, enums, pure rules: ExpertSelector (ratio + tie-break), QueuePolicy (aging)
+  AssignHub.Domain/           Rich entities (factories, private setters; §4.5), enums, pure rules: ExpertSelector (ratio + tie-break), QueuePolicy (aging)
   AssignHub.Application/      Use cases: CreateRequest, CloseRequest, CreateExpert, ActivateExpert, DeactivateExpert, DrainQueue; DTOs; validation
   AssignHub.Infrastructure/   EF Core DbContext, configurations, Persian enum converters, migrations, SQL for atomic assignment
   AssignHub.Api/              Controllers, DI, `ApiResponse<T>` envelope, Swagger, QueueSweeper (BackgroundService), dev seeding
@@ -136,6 +136,40 @@ The API uses the English names. The database stores the Persian values as `nvarc
 
 - Only `Assigned` requests can be closed. Closing decrements the expert's `OpenCount` and triggers queue processing.
 - A request is never assigned twice and never moves backwards.
+
+### 4.5 Modeling approach: rich domain model
+
+Business rules live in `AssignHub.Domain`. Entities protect their own invariants. Application code orchestrates use cases and never sets entity state directly.
+
+**Entity shape**
+
+- All properties have private setters. EF Core uses a private parameterless constructor. `AssignHub.Domain` still references nothing.
+- Entities are created only through static factories, which enforce the §4.2 rules and always return a valid entity:
+  - `Expert.Create(name, capacity, specialties, isActive, now)` starts with `OpenCount = 0` and `LastAssignedAt = null`.
+  - `Request.Create(requestKey, title, description, subject, priority, now)` starts as `Pending`, with `ExpertId`, `AssignedAt` and `ClosedAt` null.
+- `now` is passed in by the caller, which reads it from the injected `TimeProvider`.
+- `Expert.Specialties` is exposed as a read-only collection backed by a private list.
+- A state change is an entity method only if a tracked single-row `SaveChanges` is safe for it: `Expert.Activate()` and `Expert.Deactivate()` (both idempotent). EF Core writes only the changed column, so a stale in-memory `OpenCount` is never written back.
+- Domain questions about an entity are entity methods. Example: `Request.HasSamePayload(title, description, subject, priority)` decides between the 200 replay and the 409 conflict in §6.2.
+
+**What stays in the database**
+
+Assigning and closing change `OpenCount`, `LastAssignedAt` and `Status` under concurrency. They go only through the conditional updates in §6.1 and §9.1. They never go through an entity method followed by `SaveChanges`, because that would be a read-check-write race across instances. So there is deliberately no `Expert.Assign()` and no `Request.Close()`. The Domain still owns the rules those statements apply: `ExpertSelector` (§5), `QueuePolicy` (§7.1) and the lifecycle (§4.4).
+
+| Rule | Owner |
+|---|---|
+| Name 1–200 chars, capacity 1–1000, at least one distinct specialty | `Expert.Create` |
+| Request key and title required, field lengths, starts `Pending` | `Request.Create` |
+| Same payload on `RequestKey` replay | `Request.HasSamePayload` |
+| Activate / deactivate | `Expert.Activate` / `Expert.Deactivate` |
+| Load ratio and tie-break | `ExpertSelector` |
+| Priority and aging | `QueuePolicy` |
+| Capacity never exceeded, no double assignment, `Assigned → Closed` | conditional `UPDATE`s (§6.1, §9.1) |
+| `RequestKey` uniqueness | `UX_Requests_RequestKey` (§6.2) |
+
+**Errors**
+
+A factory or method that rejects its input throws `DomainException` with a human-readable message, which becomes a 400 (§9.0). DTO data annotations handle only the request shape: required fields and unknown enum values. Business ranges and lengths are not repeated in the DTOs.
 
 ---
 
@@ -339,7 +373,7 @@ public record ApiResponse<T>(bool IsSuccess, T? Data, List<string> Errors);
 - HTTP status codes are still set normally (200, 201, 400, 404, 409, 500), so clients can rely on either.
 - Two small hooks keep every response in this shape:
   - **Model-validation failures:** `InvalidModelStateResponseFactory` returns a 400 envelope that collects the messages.
-  - **Unhandled exceptions:** one exception-handling middleware returns a 500 envelope with `"An unexpected error occurred."` and logs the details.
+  - **Exceptions:** one exception-handling middleware maps `DomainException` (§4.5) to a 400 envelope carrying its message. Any other exception becomes a 500 envelope with `"An unexpected error occurred."`, and the details are logged.
 
 ### 9.1 Requests
 
@@ -416,6 +450,13 @@ Migrations are applied on startup when enabled. EF Core's built-in migration loc
 - Aging promotes a Normal request at exactly `T`.
 - An aged Normal beats a younger Urgent.
 - Id tie-break.
+
+**Entities**
+
+- `Expert.Create` rejects capacity 0 and 1001, an empty or over-long name, no specialties and duplicate specialties. A valid call starts with `OpenCount = 0` and `LastAssignedAt = null`.
+- `Request.Create` rejects an empty key or title and over-long fields. A valid call starts as `Pending` with no expert.
+- `Request.HasSamePayload` returns true when all four fields are equal, and false when any one differs.
+- `Activate` / `Deactivate` are idempotent.
 
 **Persian enum converter**
 

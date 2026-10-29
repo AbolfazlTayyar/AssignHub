@@ -19,7 +19,7 @@ AssignHub is an ASP.NET Core Web API. It assigns requests to experts using three
 ## Layout and dependencies
 
 ```
-src/AssignHub.Domain/          pure rules: ExpertSelector, QueuePolicy, entities, enums (no EF, no I/O)
+src/AssignHub.Domain/          rich entities, pure rules (ExpertSelector, QueuePolicy), enums (no EF, no I/O)
 src/AssignHub.Application/     use cases, DTOs, validation
 src/AssignHub.Infrastructure/  DbContext, configurations, Persian enum converter, migrations, atomic-assignment SQL
 src/AssignHub.Api/             controllers, DI, ApiResponse<T>, exception middleware, QueueSweeper, dev seeding
@@ -28,6 +28,8 @@ tests/AssignHub.IntegrationTests/  real SQL Server via Testcontainers
 ```
 
 `Api → Application → Domain`. `Infrastructure → Application, Domain`. Domain references nothing.
+
+**Rich domain model (SPEC §4.5).** Entities have private setters, are created through factories (`Expert.Create`, `Request.Create`) and change state only through their own methods. Application code orchestrates and never sets entity state. The one exception is assign and close: they stay as conditional SQL updates (§6.1, §9.1). Never add `Expert.Assign()` or `Request.Close()` + `SaveChanges`.
 
 ## Commands
 
