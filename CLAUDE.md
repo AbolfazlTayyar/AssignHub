@@ -2,8 +2,8 @@
 
 AssignHub is an ASP.NET Core Web API. It assigns requests to experts using three rules: match on specialty, then lowest load ratio, then a fixed tie-break. It stays correct under concurrency and across multiple instances. It runs a priority waiting queue with aging.
 
-- **Requirements:** [DotNet-Developer-Task.md](DotNet-Developer-Task.md). This is the original task. Don't edit it.
-- **Design:** [SPEC.md](SPEC.md) is the **source of truth**. Read the relevant section before you implement anything.
+- **Requirements:** [docs/DotNet-Developer-Task.md](docs/DotNet-Developer-Task.md). This is the original task. Don't edit it.
+- **Design:** [docs/SPEC.md](docs/SPEC.md) is the **source of truth**. Read the relevant section before you implement anything.
 
 ## SPEC.md is authoritative
 

@@ -1,6 +1,6 @@
 # Architecture Decision Records
 
-Architecture-level decisions only. Behaviour and implementation details live in [SPEC.md](../../SPEC.md).
+Architecture-level decisions only. Behaviour and implementation details live in [SPEC.md](../SPEC.md).
 
 Each ADR has four short sections: Decision, Why, Alternatives (with why each was rejected), Consequences.
 
