@@ -17,12 +17,16 @@ public sealed class SqlServerFixture : IAsyncLifetime
 
     public async ValueTask DisposeAsync() => await _container.DisposeAsync();
 
-    public async Task<string> CreateDatabaseAsync(CancellationToken cancellationToken)
-    {
-        var connectionString = new SqlConnectionStringBuilder(_container.GetConnectionString())
+    // The database does not exist yet; the API creates and migrates it on startup.
+    public string NewDatabaseConnectionString() =>
+        new SqlConnectionStringBuilder(_container.GetConnectionString())
         {
             InitialCatalog = $"AssignHub_{Guid.NewGuid():N}",
         }.ConnectionString;
+
+    public async Task<string> CreateDatabaseAsync(CancellationToken cancellationToken)
+    {
+        var connectionString = NewDatabaseConnectionString();
 
         var options = new DbContextOptionsBuilder<AssignHubDbContext>().UseSqlServer(connectionString).Options;
         await using var db = new AssignHubDbContext(options);

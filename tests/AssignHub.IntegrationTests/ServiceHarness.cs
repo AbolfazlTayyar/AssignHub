@@ -127,29 +127,12 @@ internal sealed class ServiceHarness : IAsyncDisposable
             .Where(e => e.Id == expertId)
             .ExecuteUpdateAsync(s => s.SetProperty(e => e.OpenCount, openCount), cancellationToken));
 
-    // ADR 0006: OpenCount must always equal the number of Assigned requests, and never exceed Capacity.
-    public async Task AssertCountersConsistentAsync(CancellationToken cancellationToken)
-    {
-        var experts = await DbAsync(db => db.Experts
-            .Select(e => new
-            {
-                e.Id,
-                e.Capacity,
-                e.OpenCount,
-                Assigned = db.Requests.Count(r => r.ExpertId == e.Id && r.Status == RequestStatus.Assigned),
-            })
-            .ToListAsync(cancellationToken));
-
-        foreach (var expert in experts)
+    public Task AssertCountersConsistentAsync(CancellationToken cancellationToken) =>
+        DbAsync(async db =>
         {
-            Assert.Equal(expert.Assigned, expert.OpenCount);
-            Assert.InRange(expert.OpenCount, 0, expert.Capacity);
-        }
-
-        var pendingWithExpert = await DbAsync(db => db.Requests
-            .CountAsync(r => r.Status == RequestStatus.Pending && r.ExpertId != null, cancellationToken));
-        Assert.Equal(0, pendingWithExpert);
-    }
+            await DbInspector.AssertCountersConsistentAsync(db, cancellationToken);
+            return 0;
+        });
 
     public ValueTask DisposeAsync() => _provider.DisposeAsync();
 }
