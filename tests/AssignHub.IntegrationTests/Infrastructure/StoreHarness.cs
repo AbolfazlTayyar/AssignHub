@@ -1,0 +1,175 @@
+using System.Collections.Concurrent;
+using AssignHub.Application.Abstractions;
+using AssignHub.Domain.Enums;
+using AssignHub.Domain.Experts;
+using AssignHub.Domain.Requests;
+using AssignHub.Infrastructure;
+using AssignHub.Infrastructure.Persistence;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
+
+namespace AssignHub.IntegrationTests.Infrastructure;
+
+// Each call runs in its own DI scope (own DbContext and connection), like a separate HTTP request.
+internal sealed class StoreHarness : IAsyncDisposable
+{
+    private readonly ServiceProvider _provider;
+
+    private StoreHarness(ServiceProvider provider, FakeTimeProvider time, SqlCapture sql)
+    {
+        _provider = provider;
+        Time = time;
+        Sql = sql;
+    }
+
+    public FakeTimeProvider Time { get; }
+
+    public SqlCapture Sql { get; }
+
+    public static async Task<StoreHarness> CreateAsync(SqlServerFixture fixture, CancellationToken cancellationToken)
+    {
+        var connectionString = await fixture.CreateDatabaseAsync(cancellationToken);
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [$"ConnectionStrings:{DependencyInjection.ConnectionStringName}"] = connectionString,
+            })
+            .Build();
+
+        var time = new FakeTimeProvider(new DateTimeOffset(2026, 10, 30, 9, 0, 0, TimeSpan.Zero));
+        var sql = new SqlCapture();
+
+        var services = new ServiceCollection();
+        services.AddSingleton<IConfiguration>(configuration);
+        services.AddSingleton<TimeProvider>(time);
+        services.AddLogging(b => b.AddProvider(sql));
+        services.AddInfrastructure(configuration);
+
+        return new StoreHarness(services.BuildServiceProvider(validateScopes: true), time, sql);
+    }
+
+    public DateTime Now => Time.GetUtcNow().UtcDateTime;
+
+    public async Task<T> RunAsync<T>(Func<IServiceProvider, Task<T>> action)
+    {
+        await using var scope = _provider.CreateAsyncScope();
+        return await action(scope.ServiceProvider);
+    }
+
+    public Task<T> DbAsync<T>(Func<AssignHubDbContext, Task<T>> action) =>
+        RunAsync(sp => action(sp.GetRequiredService<AssignHubDbContext>()));
+
+    public Task<TryAssignResult> TryAssignAsync(int requestId, CancellationToken cancellationToken) =>
+        RunAsync(sp => sp.GetRequiredService<IAssignmentStore>().TryAssignAsync(requestId, cancellationToken));
+
+    public Task<CloseResult> CloseAsync(int requestId, CancellationToken cancellationToken) =>
+        RunAsync(sp => sp.GetRequiredService<IAssignmentStore>().CloseAsync(requestId, cancellationToken));
+
+    public Task<AddRequestResult> TryAddAsync(Request request, CancellationToken cancellationToken) =>
+        RunAsync(sp => sp.GetRequiredService<IRequestStore>().TryAddAsync(request, cancellationToken));
+
+    public Task<Request?> GetRequestAsync(int id, CancellationToken cancellationToken) =>
+        RunAsync(sp => sp.GetRequiredService<IRequestStore>().GetAsync(id, cancellationToken));
+
+    public Task<Expert?> GetExpertAsync(int id, CancellationToken cancellationToken) =>
+        RunAsync(sp => sp.GetRequiredService<IExpertStore>().GetAsync(id, cancellationToken));
+
+    public async Task<int> AddExpertAsync(
+        int capacity,
+        Subject[] specialties,
+        bool isActive,
+        CancellationToken cancellationToken)
+    {
+        var expert = Expert.Create($"Expert {Guid.NewGuid():N}", capacity, specialties, isActive, Now);
+        await RunAsync(async sp =>
+        {
+            await sp.GetRequiredService<IExpertStore>().AddAsync(expert, cancellationToken);
+            return expert.Id;
+        });
+        return expert.Id;
+    }
+
+    public async Task<int> AddRequestAsync(
+        Subject subject,
+        Priority priority,
+        CancellationToken cancellationToken)
+    {
+        var request = Request.Create($"key-{Guid.NewGuid():N}", "Title", null, subject, priority, Now);
+        var result = await TryAddAsync(request, cancellationToken);
+        return result.Request.Id;
+    }
+
+    // Test setup only: production code never sets OpenCount outside the conditional updates.
+    public Task<int> SetOpenCountAsync(int expertId, int openCount, CancellationToken cancellationToken) =>
+        DbAsync(db => db.Experts
+            .Where(e => e.Id == expertId)
+            .ExecuteUpdateAsync(s => s.SetProperty(e => e.OpenCount, openCount), cancellationToken));
+
+    // ADR 0006: OpenCount must always equal the number of Assigned requests, and never exceed Capacity.
+    public async Task AssertCountersConsistentAsync(CancellationToken cancellationToken)
+    {
+        var experts = await DbAsync(db => db.Experts
+            .Select(e => new
+            {
+                e.Id,
+                e.Capacity,
+                e.OpenCount,
+                Assigned = db.Requests.Count(r => r.ExpertId == e.Id && r.Status == RequestStatus.Assigned),
+            })
+            .ToListAsync(cancellationToken));
+
+        foreach (var expert in experts)
+        {
+            Assert.Equal(expert.Assigned, expert.OpenCount);
+            Assert.InRange(expert.OpenCount, 0, expert.Capacity);
+        }
+
+        var pendingWithExpert = await DbAsync(db => db.Requests
+            .CountAsync(r => r.Status == RequestStatus.Pending && r.ExpertId != null, cancellationToken));
+        Assert.Equal(0, pendingWithExpert);
+    }
+
+    public ValueTask DisposeAsync() => _provider.DisposeAsync();
+}
+
+internal sealed class SqlCapture : ILoggerProvider
+{
+    private readonly ConcurrentQueue<string> _commands = new();
+
+    public IReadOnlyCollection<string> Commands => _commands;
+
+    public void Clear() => _commands.Clear();
+
+    public ILogger CreateLogger(string categoryName) =>
+        categoryName == DbLoggerCategory.Database.Command.Name ? new CommandLogger(_commands) : NullLogger.Instance;
+
+    public void Dispose()
+    {
+    }
+
+    private sealed class CommandLogger(ConcurrentQueue<string> commands) : ILogger
+    {
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            if (eventId.Id == RelationalEventId.CommandExecuted.Id)
+            {
+                commands.Enqueue(formatter(state, exception));
+            }
+        }
+    }
+}

@@ -16,6 +16,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\AssignHub.Domain\AssignHub.Domain.csproj" />
+    <ProjectReference Include="..\..\src\AssignHub.Infrastructure\AssignHub.Infrastructure.csproj" />
   </ItemGroup>
 
 </Project>
