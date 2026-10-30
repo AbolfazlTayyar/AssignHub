@@ -34,12 +34,12 @@ tests/AssignHub.IntegrationTests/  real SQL Server via Testcontainers
 ## Commands
 
 ```bash
-dotnet build                                    # must be 0 warnings, 0 errors
-dotnet test tests/AssignHub.UnitTests           # fast, no Docker
-dotnet test tests/AssignHub.IntegrationTests    # needs Docker running
-dotnet test                                     # everything
+dotnet build                                            # must be 0 warnings, 0 errors
+dotnet test --project tests/AssignHub.UnitTests         # fast, no Docker
+dotnet test --project tests/AssignHub.IntegrationTests  # needs Docker running
+dotnet test                                             # everything (Microsoft.Testing.Platform, see global.json)
 dotnet ef migrations add <Name> -p src/AssignHub.Infrastructure -s src/AssignHub.Api
-docker compose up --build                       # SQL Server + api-1 (:5001) + api-2 (:5002)
+docker compose up --build                               # SQL Server + api-1 (:5001) + api-2 (:5002)
 ```
 
 ## Invariants: don't break these

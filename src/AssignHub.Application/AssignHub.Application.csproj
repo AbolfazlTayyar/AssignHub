@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\AssignHub.Domain\AssignHub.Domain.csproj" />
+  </ItemGroup>
+
+</Project>
