@@ -2,7 +2,6 @@ using AssignHub.Application.Abstractions;
 using AssignHub.Domain.Enums;
 using AssignHub.Domain.Experts;
 using AssignHub.Infrastructure.Persistence;
-using AssignHub.Infrastructure.Persistence.Converters;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -64,30 +63,46 @@ internal sealed partial class AssignmentStore(
     }
 
     // SPEC §9.1. Lock order is Requests → Experts, the reverse tables of assign but never the same rows.
+    // ExpertId is written in the same statement that makes a request Assigned and never changes after
+    // that, so reading it first is safe; the conditional UPDATE still decides who closes the request.
     public async Task<CloseResult> CloseAsync(int requestId, CancellationToken cancellationToken)
     {
+        var current = await db.Requests
+            .AsNoTracking()
+            .Where(r => r.Id == requestId)
+            .Select(r => new { r.Status, r.ExpertId })
+            .SingleOrDefaultAsync(cancellationToken);
+
+        switch (current)
+        {
+            case null:
+                return new CloseResult(CloseOutcome.NotFound);
+            case { Status: RequestStatus.Closed }:
+                return new CloseResult(CloseOutcome.AlreadyClosed, current.ExpertId);
+            case { Status: RequestStatus.Pending }:
+                return new CloseResult(CloseOutcome.NotAssigned);
+        }
+
+        var expertId = current.ExpertId!.Value;
         var strategy = db.Database.CreateExecutionStrategy();
-        var closedExpertId = await strategy.ExecuteAsync(
+        var closedHere = await strategy.ExecuteAsync(
             async ct =>
             {
                 await using var transaction = await db.Database.BeginTransactionAsync(ct);
                 var now = timeProvider.GetUtcNow().UtcDateTime;
-                var closed = PersianEnumValues.ToDb(RequestStatus.Closed);
-                var assigned = PersianEnumValues.ToDb(RequestStatus.Assigned);
 
-                var expertIds = await db.Database
-                    .SqlQuery<int?>($"""
-                        UPDATE [Requests]
-                        SET [Status] = {closed}, [ClosedAt] = {now}
-                        OUTPUT inserted.[ExpertId] AS [Value]
-                        WHERE [Id] = {requestId} AND [Status] = {assigned}
-                        """)
-                    .ToListAsync(ct);
+                var closed = await db.Requests
+                    .Where(r => r.Id == requestId && r.Status == RequestStatus.Assigned)
+                    .ExecuteUpdateAsync(
+                        s => s
+                            .SetProperty(r => r.Status, RequestStatus.Closed)
+                            .SetProperty(r => r.ClosedAt, now),
+                        ct);
 
-                if (expertIds is not [int expertId])
+                if (closed == 0)
                 {
                     await transaction.RollbackAsync(ct);
-                    return (int?)null;
+                    return false;
                 }
 
                 var released = await db.Experts
@@ -100,28 +115,12 @@ internal sealed partial class AssignmentStore(
                 }
 
                 await transaction.CommitAsync(ct);
-                return expertId;
+                return true;
             },
             cancellationToken);
 
-        if (closedExpertId is int id)
-        {
-            return new CloseResult(CloseOutcome.Closed, id);
-        }
-
-        var current = await db.Requests
-            .AsNoTracking()
-            .Where(r => r.Id == requestId)
-            .Select(r => new { r.Status, r.ExpertId })
-            .SingleOrDefaultAsync(cancellationToken);
-
-        // A request seen as Assigned here was still Pending when the UPDATE ran, so the close lost to it.
-        return current switch
-        {
-            null => new CloseResult(CloseOutcome.NotFound),
-            { Status: RequestStatus.Closed } => new CloseResult(CloseOutcome.AlreadyClosed, current.ExpertId),
-            _ => new CloseResult(CloseOutcome.NotAssigned),
-        };
+        // Assigned can only move to Closed, so losing the UPDATE means a concurrent close won.
+        return new CloseResult(closedHere ? CloseOutcome.Closed : CloseOutcome.AlreadyClosed, expertId);
     }
 
     // SPEC §7.4. Status and Priority are constants, so EF inlines them as N'...' literals, which lets the

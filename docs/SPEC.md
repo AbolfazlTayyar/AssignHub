@@ -267,7 +267,7 @@ Additional rules:
 - **Isolation:** default `READ COMMITTED`. Correctness does not depend on the isolation level, because it comes from the conditional updates.
 - **Lock order:** assign touches `Experts` then `Requests`. Close touches `Requests` (a different, `Assigned` row) then `Experts`. Lock cycles are therefore not possible on the same rows.
 - **Retries:** EF Core `EnableRetryOnFailure` is enabled, and every manual transaction is wrapped in `Database.CreateExecutionStrategy().ExecuteAsync(...)`. This covers transient errors and deadlock victims (1205).
-- **Raw SQL:** the conditional updates use `ExecuteUpdateAsync` (EF Core) where it can express them, and otherwise parameterised `ExecuteSqlInterpolatedAsync`.
+- **EF Core first:** every conditional update uses `ExecuteUpdateAsync`. Raw SQL is used only where EF Core has no equivalent: the `UPDLOCK, HOLDLOCK` read that makes demo seeding race-safe, and `sp_getapplock` around database creation (§10).
 
 ### 6.2 Idempotent creation by `RequestKey`
 
@@ -418,10 +418,11 @@ public record ApiResponse<T>(bool IsSuccess, T? Data, List<string> Errors);
 
 **Close transaction:**
 
-1. `UPDATE Requests SET Status = Closed, ClosedAt = @now OUTPUT inserted.ExpertId WHERE Id = @id AND Status = Assigned`
-2. `UPDATE Experts SET OpenCount = OpenCount − 1 WHERE Id = @expertId AND OpenCount > 0`
+1. Read the request's `Status` and `ExpertId`. Missing → 404, `Closed` → 200, `Pending` → 409. `ExpertId` is set in the same statement that makes a request `Assigned` and never changes after that, so reading it first is safe.
+2. `UPDATE Requests SET Status = Closed, ClosedAt = @now WHERE Id = @id AND Status = Assigned`
+3. `UPDATE Experts SET OpenCount = OpenCount − 1 WHERE Id = @expertId AND OpenCount > 0`
 
-Commit, then drain. If step 1 affects 0 rows, re-read the request: if `Closed` → 200, if `Pending` → 409.
+Steps 2 and 3 run in one transaction (Requests → Experts). Commit, then drain. If step 2 affects 0 rows, a concurrent close won (`Assigned` can only become `Closed`), so the result is still 200.
 
 ### 9.2 Experts
 
