@@ -452,7 +452,7 @@ Commit, then drain. If step 1 affects 0 rows, re-read the request: if `Closed` â
 }
 ```
 
-Migrations are applied on startup when enabled. EF Core's built-in migration lock makes this safe when two instances start together. Demo seed data is created in `Development` only, idempotently. Seed: 2 Financial experts (capacities 4 and 10), 1 Legal (capacity 5), 1 Technical + Legal (capacity 3), and 1 inactive Technical expert.
+Migrations are applied on startup when enabled. EF Core's built-in migration lock makes this safe when two instances start together. That lock lives inside the database, so it cannot protect `CREATE DATABASE` on an empty server. The initializer therefore creates the database first, only if `DB_ID` is null, under a server-wide `sp_getapplock` in `master`; `Migrate` then never creates it. Demo seed data is created in `Development` only, idempotently. Seed: 2 Financial experts (capacities 4 and 10), 1 Legal (capacity 5), 1 Technical + Legal (capacity 3), and 1 inactive Technical expert.
 
 ---
 
