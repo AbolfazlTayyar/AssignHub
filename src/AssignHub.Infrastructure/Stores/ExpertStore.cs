@@ -15,6 +15,12 @@ internal sealed class ExpertStore(AssignHubDbContext db) : IExpertStore
 
     public Task<Expert?> GetAsync(int id, CancellationToken cancellationToken) =>
         db.Experts
+            .AsNoTracking()
+            .Include(e => e.Specialties)
+            .SingleOrDefaultAsync(e => e.Id == id, cancellationToken);
+
+    public Task<Expert?> FindForUpdateAsync(int id, CancellationToken cancellationToken) =>
+        db.Experts
             .Include(e => e.Specialties)
             .SingleOrDefaultAsync(e => e.Id == id, cancellationToken);
 

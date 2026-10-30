@@ -73,7 +73,7 @@ Application has no EF Core reference. It defines narrow ports in `AssignHub.Appl
 | Port | Responsibility |
 |---|---|
 | `IRequestStore` | `TryAddAsync` (insert; a `RequestKey` unique violation returns the existing row, §6.2), `GetAsync` |
-| `IExpertStore` | `AddAsync`, `GetAsync` (tracked, for activate/deactivate), `ListAsync`, `SaveChangesAsync` |
+| `IExpertStore` | `AddAsync`, `GetAsync` (not tracked, always fresh), `FindForUpdateAsync` (tracked, for activate/deactivate), `ListAsync`, `SaveChangesAsync` |
 | `IAssignmentStore` | `TryAssignAsync` (§6.1), `CloseAsync` (§9.1), `GetPendingBatchAsync` (the drain query, §7.4) |
 
 Everything SQL-Server-specific (errors 2601/2627, the conditional `UPDATE`s, the `CASE` ordering, the execution strategy) stays behind these ports, so application code cannot drift into read-check-write.
