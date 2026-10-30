@@ -312,25 +312,29 @@ After waiting `T`, a Normal request competes with Urgent requests purely by age.
 ```
 exhausted = {}
 loop:
+    active = subjects − exhausted
+    if active empty → stop
     batch = SELECT TOP (@BatchSize) Id, Subject FROM Requests
-            WHERE Status = N'در انتظار' AND Subject IN (@subjects)
+            WHERE Status = N'در انتظار' AND Subject IN (@active)
             ORDER BY CASE WHEN Priority = N'فوری' OR CreatedAt <= @agingCutoff THEN 1 ELSE 0 END DESC,
                      CreatedAt, Id
     if batch empty → stop
-    assignedAny = false
+    progress = false
     foreach r in batch:
         if r.Subject in exhausted → skip              -- don't block other subjects
         switch TryAssign(r.Id):
-            Assigned        → assignedAny = true
-            NoCandidate     → exhausted.add(r.Subject) -- no expert left for this subject
+            Assigned        → progress = true
+            NoCandidate     → exhausted.add(r.Subject); progress = true  -- no expert left for this subject
             AlreadyHandled  → continue                 -- another instance got it
-    if not assignedAny or exhausted ⊇ subjects → stop
+    if not progress → stop
 ```
 
 Notes:
 
 - `@agingCutoff = now − T`, taken from `TimeProvider`.
-- A request whose subject has **no** eligible expert only marks that subject as exhausted. Requests of other subjects in the same batch continue, which satisfies "must not block the rest of the queue".
+- A request whose subject has **no** eligible expert only marks that subject as exhausted. Requests of other subjects in the same batch continue, and the next batch excludes exhausted subjects, which satisfies "must not block the rest of the queue".
+- Re-querying with `@active` matters when a whole batch belongs to unservable subjects. Example (`BatchSize` 100): 100 old Technical requests with no Technical expert, and a Legal request behind them with a free Legal expert. The first batch only exhausts Technical; the next batch reads Legal only and assigns it. Without excluding exhausted subjects, every drain (and every sweep) would re-read the same 100 Technical requests and stop.
+- The loop terminates: each iteration with progress either assigns a request (bounded by free capacity) or exhausts a subject (at most three). An iteration where every request was `AlreadyHandled` means another instance is draining, so it stops.
 - Because the queue is read in priority order and `TryAssign` applies Rule 1, both the priority policy and the ratio rule hold at every trigger.
 
 ### 7.5 Triggers
