@@ -18,7 +18,7 @@ public sealed class PersistenceTests(SqlServerFixture fixture)
     {
         for (var iteration = 0; iteration < 5; iteration++)
         {
-            await using var h = await StoreHarness.CreateAsync(fixture, Ct);
+            await using var h = await ServiceHarness.CreateAsync(fixture, Ct);
 
             var results = await Task.WhenAll(Enumerable.Range(0, 20).Select(_ =>
                 h.TryAddAsync(Request.Create("same-key", "Title", "Body", Subject.Legal, Priority.Normal, h.Now), Ct)));
@@ -32,7 +32,7 @@ public sealed class PersistenceTests(SqlServerFixture fixture)
     [Fact]
     public async Task TryAdd_DuplicateKey_ReturnsExistingRowWithCurrentState()
     {
-        await using var h = await StoreHarness.CreateAsync(fixture, Ct);
+        await using var h = await ServiceHarness.CreateAsync(fixture, Ct);
         await h.AddExpertAsync(1, [Subject.Legal], isActive: true, Ct);
         var original = Request.Create("key-1", "Title", null, Subject.Legal, Priority.Normal, h.Now);
         var first = await h.TryAddAsync(original, Ct);
@@ -51,7 +51,7 @@ public sealed class PersistenceTests(SqlServerFixture fixture)
     [Fact]
     public async Task Enums_AreStoredInPersian()
     {
-        await using var h = await StoreHarness.CreateAsync(fixture, Ct);
+        await using var h = await ServiceHarness.CreateAsync(fixture, Ct);
         await h.AddExpertAsync(2, [Subject.Technical], isActive: true, Ct);
         var requestId = await h.AddRequestAsync(Subject.Technical, Priority.Urgent, Ct);
         await h.TryAssignAsync(requestId, Ct);
@@ -70,7 +70,7 @@ public sealed class PersistenceTests(SqlServerFixture fixture)
     [Fact]
     public async Task UnknownStoredEnumValue_ThrowsOnRead()
     {
-        await using var h = await StoreHarness.CreateAsync(fixture, Ct);
+        await using var h = await ServiceHarness.CreateAsync(fixture, Ct);
         var requestId = await h.AddRequestAsync(Subject.Legal, Priority.Normal, Ct);
         await h.DbAsync(db => db.Database.ExecuteSqlAsync(
             $"UPDATE [Requests] SET [Priority] = {"خیلی فوری"} WHERE [Id] = {requestId}", Ct));
@@ -81,7 +81,7 @@ public sealed class PersistenceTests(SqlServerFixture fixture)
     [Fact]
     public async Task CheckConstraint_RejectsAssignedRequestWithoutExpert()
     {
-        await using var h = await StoreHarness.CreateAsync(fixture, Ct);
+        await using var h = await ServiceHarness.CreateAsync(fixture, Ct);
         var requestId = await h.AddRequestAsync(Subject.Legal, Priority.Normal, Ct);
         var assigned = PersianEnumValues.ToDb(RequestStatus.Assigned);
 
@@ -93,7 +93,7 @@ public sealed class PersistenceTests(SqlServerFixture fixture)
     [Fact]
     public async Task GeneratedSql_UsesUnicodeLiteralsAndCaseOrdering()
     {
-        await using var h = await StoreHarness.CreateAsync(fixture, Ct);
+        await using var h = await ServiceHarness.CreateAsync(fixture, Ct);
         await h.AddExpertAsync(1, [Subject.Legal], isActive: true, Ct);
         var requestId = await h.AddRequestAsync(Subject.Legal, Priority.Normal, Ct);
         h.Sql.Clear();

@@ -1,5 +1,8 @@
 using System.Collections.Concurrent;
+using AssignHub.Application;
 using AssignHub.Application.Abstractions;
+using AssignHub.Application.Experts;
+using AssignHub.Application.Requests;
 using AssignHub.Domain.Enums;
 using AssignHub.Domain.Experts;
 using AssignHub.Domain.Requests;
@@ -13,14 +16,14 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 
-namespace AssignHub.IntegrationTests.Infrastructure;
+namespace AssignHub.IntegrationTests;
 
 // Each call runs in its own DI scope (own DbContext and connection), like a separate HTTP request.
-internal sealed class StoreHarness : IAsyncDisposable
+internal sealed class ServiceHarness : IAsyncDisposable
 {
     private readonly ServiceProvider _provider;
 
-    private StoreHarness(ServiceProvider provider, FakeTimeProvider time, SqlCapture sql)
+    private ServiceHarness(ServiceProvider provider, FakeTimeProvider time, SqlCapture sql)
     {
         _provider = provider;
         Time = time;
@@ -31,15 +34,22 @@ internal sealed class StoreHarness : IAsyncDisposable
 
     public SqlCapture Sql { get; }
 
-    public static async Task<StoreHarness> CreateAsync(SqlServerFixture fixture, CancellationToken cancellationToken)
+    public static async Task<ServiceHarness> CreateAsync(
+        SqlServerFixture fixture,
+        CancellationToken cancellationToken,
+        IReadOnlyDictionary<string, string?>? settings = null)
     {
         var connectionString = await fixture.CreateDatabaseAsync(cancellationToken);
-        var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                [$"ConnectionStrings:{DependencyInjection.ConnectionStringName}"] = connectionString,
-            })
-            .Build();
+        var values = new Dictionary<string, string?>
+        {
+            [$"ConnectionStrings:{AssignHub.Infrastructure.DependencyInjection.ConnectionStringName}"] = connectionString,
+        };
+        foreach (var (key, value) in settings ?? new Dictionary<string, string?>())
+        {
+            values[key] = value;
+        }
+
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(values).Build();
 
         var time = new FakeTimeProvider(new DateTimeOffset(2026, 10, 30, 9, 0, 0, TimeSpan.Zero));
         var sql = new SqlCapture();
@@ -48,9 +58,10 @@ internal sealed class StoreHarness : IAsyncDisposable
         services.AddSingleton<IConfiguration>(configuration);
         services.AddSingleton<TimeProvider>(time);
         services.AddLogging(b => b.AddProvider(sql));
+        services.AddApplication(configuration);
         services.AddInfrastructure(configuration);
 
-        return new StoreHarness(services.BuildServiceProvider(validateScopes: true), time, sql);
+        return new ServiceHarness(services.BuildServiceProvider(validateScopes: true), time, sql);
     }
 
     public DateTime Now => Time.GetUtcNow().UtcDateTime;
@@ -63,6 +74,12 @@ internal sealed class StoreHarness : IAsyncDisposable
 
     public Task<T> DbAsync<T>(Func<AssignHubDbContext, Task<T>> action) =>
         RunAsync(sp => action(sp.GetRequiredService<AssignHubDbContext>()));
+
+    public Task<T> RequestsAsync<T>(Func<RequestService, Task<T>> action) =>
+        RunAsync(sp => action(sp.GetRequiredService<RequestService>()));
+
+    public Task<T> ExpertsAsync<T>(Func<ExpertService, Task<T>> action) =>
+        RunAsync(sp => action(sp.GetRequiredService<ExpertService>()));
 
     public Task<TryAssignResult> TryAssignAsync(int requestId, CancellationToken cancellationToken) =>
         RunAsync(sp => sp.GetRequiredService<IAssignmentStore>().TryAssignAsync(requestId, cancellationToken));

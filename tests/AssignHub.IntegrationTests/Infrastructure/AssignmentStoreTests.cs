@@ -13,7 +13,7 @@ public sealed class AssignmentStoreTests(SqlServerFixture fixture)
     {
         for (var iteration = 0; iteration < 5; iteration++)
         {
-            await using var h = await StoreHarness.CreateAsync(fixture, Ct);
+            await using var h = await ServiceHarness.CreateAsync(fixture, Ct);
             var expertId = await h.AddExpertAsync(5, [Subject.Legal], isActive: true, Ct);
             var requestIds = new List<int>();
             for (var i = 0; i < 20; i++)
@@ -35,7 +35,7 @@ public sealed class AssignmentStoreTests(SqlServerFixture fixture)
     {
         for (var iteration = 0; iteration < 5; iteration++)
         {
-            await using var h = await StoreHarness.CreateAsync(fixture, Ct);
+            await using var h = await ServiceHarness.CreateAsync(fixture, Ct);
             await h.AddExpertAsync(5, [Subject.Financial], isActive: true, Ct);
             await h.AddExpertAsync(5, [Subject.Financial], isActive: true, Ct);
             var requestId = await h.AddRequestAsync(Subject.Financial, Priority.Urgent, Ct);
@@ -53,7 +53,7 @@ public sealed class AssignmentStoreTests(SqlServerFixture fixture)
     [Fact]
     public async Task TryAssign_TaskExample_PicksLowestRatio()
     {
-        await using var h = await StoreHarness.CreateAsync(fixture, Ct);
+        await using var h = await ServiceHarness.CreateAsync(fixture, Ct);
         var e1 = await h.AddExpertAsync(4, [Subject.Financial], isActive: true, Ct);
         var e2 = await h.AddExpertAsync(10, [Subject.Financial], isActive: true, Ct);
         await h.SetOpenCountAsync(e1, 2, Ct);
@@ -74,7 +74,7 @@ public sealed class AssignmentStoreTests(SqlServerFixture fixture)
     [Fact]
     public async Task TryAssign_NoEligibleExpert_LeavesRequestPending()
     {
-        await using var h = await StoreHarness.CreateAsync(fixture, Ct);
+        await using var h = await ServiceHarness.CreateAsync(fixture, Ct);
         await h.AddExpertAsync(5, [Subject.Technical], isActive: false, Ct);
         await h.AddExpertAsync(5, [Subject.Legal], isActive: true, Ct);
         var full = await h.AddExpertAsync(1, [Subject.Technical], isActive: true, Ct);
@@ -92,7 +92,7 @@ public sealed class AssignmentStoreTests(SqlServerFixture fixture)
     [Fact]
     public async Task TryAssign_AlreadyAssigned_ReturnsAlreadyHandled()
     {
-        await using var h = await StoreHarness.CreateAsync(fixture, Ct);
+        await using var h = await ServiceHarness.CreateAsync(fixture, Ct);
         await h.AddExpertAsync(5, [Subject.Legal], isActive: true, Ct);
         var requestId = await h.AddRequestAsync(Subject.Legal, Priority.Normal, Ct);
         await h.TryAssignAsync(requestId, Ct);
@@ -104,7 +104,7 @@ public sealed class AssignmentStoreTests(SqlServerFixture fixture)
     [Fact]
     public async Task Close_Assigned_ReleasesSlotAndIsIdempotent()
     {
-        await using var h = await StoreHarness.CreateAsync(fixture, Ct);
+        await using var h = await ServiceHarness.CreateAsync(fixture, Ct);
         var expertId = await h.AddExpertAsync(1, [Subject.Legal], isActive: true, Ct);
         var requestId = await h.AddRequestAsync(Subject.Legal, Priority.Normal, Ct);
         await h.TryAssignAsync(requestId, Ct);
@@ -126,7 +126,7 @@ public sealed class AssignmentStoreTests(SqlServerFixture fixture)
     [Fact]
     public async Task Close_PendingOrMissing_IsRejected()
     {
-        await using var h = await StoreHarness.CreateAsync(fixture, Ct);
+        await using var h = await ServiceHarness.CreateAsync(fixture, Ct);
         var requestId = await h.AddRequestAsync(Subject.Legal, Priority.Normal, Ct);
 
         Assert.Equal(new CloseResult(CloseOutcome.NotAssigned), await h.CloseAsync(requestId, Ct));
@@ -138,7 +138,7 @@ public sealed class AssignmentStoreTests(SqlServerFixture fixture)
     {
         for (var iteration = 0; iteration < 3; iteration++)
         {
-            await using var h = await StoreHarness.CreateAsync(fixture, Ct);
+            await using var h = await ServiceHarness.CreateAsync(fixture, Ct);
             await h.AddExpertAsync(3, [Subject.Legal], isActive: true, Ct);
             await h.AddExpertAsync(2, [Subject.Legal, Subject.Financial], isActive: true, Ct);
 
@@ -167,7 +167,7 @@ public sealed class AssignmentStoreTests(SqlServerFixture fixture)
     [Fact]
     public async Task GetPendingBatch_OrdersByEffectiveUrgencyThenAgeThenId()
     {
-        await using var h = await StoreHarness.CreateAsync(fixture, Ct);
+        await using var h = await ServiceHarness.CreateAsync(fixture, Ct);
         var agedNormal = await h.AddRequestAsync(Subject.Legal, Priority.Normal, Ct);   // 09:00
         h.Time.Advance(TimeSpan.FromMinutes(2));
         var otherSubject = await h.AddRequestAsync(Subject.Technical, Priority.Urgent, Ct); // 09:02
@@ -193,7 +193,7 @@ public sealed class AssignmentStoreTests(SqlServerFixture fixture)
     [Fact]
     public async Task GetPendingBatch_SkipsAssignedRequests()
     {
-        await using var h = await StoreHarness.CreateAsync(fixture, Ct);
+        await using var h = await ServiceHarness.CreateAsync(fixture, Ct);
         await h.AddExpertAsync(1, [Subject.Legal], isActive: true, Ct);
         var assigned = await h.AddRequestAsync(Subject.Legal, Priority.Urgent, Ct);
         var pending = await h.AddRequestAsync(Subject.Legal, Priority.Urgent, Ct);
