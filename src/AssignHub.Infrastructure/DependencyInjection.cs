@@ -27,6 +27,7 @@ public static class DependencyInjection
             .Validate(o => o.MaxCandidateRefreshes >= 1, "Assignment:MaxCandidateRefreshes must be at least 1.")
             .ValidateOnStart();
 
+        services.AddScoped<DatabaseInitializer>();
         services.AddScoped<IRequestStore, RequestStore>();
         services.AddScoped<IExpertStore, ExpertStore>();
         services.AddScoped<IAssignmentStore, AssignmentStore>();
