@@ -2,8 +2,10 @@ using AssignHub.Application.Abstractions;
 using AssignHub.Infrastructure.Persistence;
 using AssignHub.Infrastructure.Stores;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace AssignHub.Infrastructure;
 
@@ -20,6 +22,10 @@ public static class DependencyInjection
 
             // SPEC §6.1: transient errors and deadlock victims (1205) are retried by the execution strategy.
             options.UseSqlServer(connectionString, sql => sql.EnableRetryOnFailure());
+
+            // A RequestKey unique violation is the expected idempotent-replay path (SPEC §6.2), not an error.
+            // Unexpected save failures still surface as exceptions and are logged by the API.
+            options.ConfigureWarnings(w => w.Log((CoreEventId.SaveChangesFailed, LogLevel.Debug)));
         });
 
         services.AddOptions<AssignmentOptions>()
