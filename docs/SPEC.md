@@ -221,7 +221,11 @@ E1 2/4 (0.5) vs E2 3/10 (0.3) → **E2**.
 
 ### 5.5 Implementation
 
-`ExpertSelector` in `AssignHub.Domain` is a pure function `IReadOnlyList<ExpertSnapshot> → ordered candidates`. It is unit-tested in isolation. The infrastructure loads the eligible snapshot for a subject (a small set) and passes it to the selector.
+`ExpertSelector` in `AssignHub.Domain` is a pure function `IReadOnlyList<ExpertSnapshot> → ordered candidates`. It is the reference definition of §5.1–5.2 and is unit-tested in isolation.
+
+At runtime the order is applied in SQL. The infrastructure does not load every eligible expert: it loads the ids of only the top `CandidatePoolSize` (K, default 10) eligible experts for the subject, ordered by the §5.2 rules, and tries them in that order. The cost of one load is therefore O(K), not O(number of eligible experts). Integration test 10 (§11.2) checks that the SQL order picks the same expert as `ExpertSelector`.
+
+The SQL order uses `CAST(OpenCount AS decimal) / Capacity` for rule 1. This is exact, not approximate: `Capacity` is at most 1000 (`CK_Experts_Capacity`), so two different ratios differ by at least 1/(1000·999) ≈ 10⁻⁶, well above the scale of the division result, and equal ratios produce identical values. Rule 3 needs no `CASE` because SQL Server sorts `NULL` first in ascending order. The capacity and race guarantees never depend on this order; they come from the conditional UPDATEs (§6.1).
 
 ---
 
@@ -233,7 +237,7 @@ Every assignment, wherever it is triggered, goes through this one primitive:
 
 ```
 for attempt in 1..MaxCandidateRefreshes (default 3):
-    candidates = ExpertSelector.Order(load eligible experts for request.Subject)
+    candidates = top CandidatePoolSize eligible experts for request.Subject, in §5.2 order  -- SQL, §5.5
     if candidates empty → return NoCandidate
     foreach expert in candidates:
         BEGIN TRAN
@@ -253,6 +257,8 @@ for attempt in 1..MaxCandidateRefreshes (default 3):
     -- every candidate filled up concurrently → reload and retry
 return NoCandidate
 ```
+
+One call makes at most `CandidatePoolSize × MaxCandidateRefreshes` claim attempts. Under heavy contention every expert it tries can fill up while other experts still have room. The call then returns `NoCandidate` and the request stays `Pending`. This is safe, because the next drain (§7) or sweeper pass assigns it; it only delays the request.
 
 Why this guarantees each of the task's requirements:
 
@@ -448,7 +454,7 @@ Steps 2 and 3 run in one transaction (Requests → Experts). Commit, then drain.
     "SweepInterval": "00:00:30",
     "BatchSize": 100
   },
-  "Assignment": { "MaxCandidateRefreshes": 3 },
+  "Assignment": { "MaxCandidateRefreshes": 3, "CandidatePoolSize": 10 },
   "Database": { "ApplyMigrationsOnStartup": true, "SeedDemoData": true }
 }
 ```
@@ -514,6 +520,9 @@ Migrations are applied on startup when enabled. EF Core's built-in migration loc
 9. **Sweeper recovery:**
    - Simulate a missed inline drain by inserting a Pending request directly into the DB while a suitable expert has a free slot.
    - `QueueSweeper` assigns it within one interval (`FakeTimeProvider`).
+10. **Candidate pool (§5.5):**
+    - With `CandidatePoolSize = 1`, sequential assignments over experts with near-equal and equal ratios (e.g. 333/1000 vs 1/3 vs 2/6) always pick the expert that `ExpertSelector` picks from *all* experts, and the load query is bounded with `TOP`.
+    - With `CandidatePoolSize = 1`, concurrent assignments never exceed any expert's capacity, and requests left `Pending` are assigned on a later pass.
 
 ---
 

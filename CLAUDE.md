@@ -50,7 +50,7 @@ docker compose up --build                               # SQL Server + api-1 (:5
 - **Lock order.** Assign touches `Experts` → `Requests`. Close touches `Requests` → `Experts`. Keep it that way.
 - **Wrap every manual transaction in `Database.CreateExecutionStrategy().ExecuteAsync(...)`.** `EnableRetryOnFailure` is on.
 - **Enums are Persian in the DB and English in the API.** Use `N'...'` literals or parameters, never non-Unicode literals. **Never sort by stored enum text.** Priority ordering uses an explicit `CASE`.
-- **Ratios are compared by cross-multiplication with `long`.** Never use floating point.
+- **Ratios are compared exactly.** In C# by cross-multiplication with `long`; in SQL by `decimal` division, which is exact because `Capacity ≤ 1000` (SPEC §5.5). Never use floating point.
 - **Time comes from the injected `TimeProvider`.** Never use `DateTime.Now`, `DateTime.UtcNow` or `DateTimeOffset.UtcNow`. All times are UTC.
 - **Clients never set `OpenCount` or `LastAssignedAt`.**
 - **Every response is an `ApiResponse<T>` `{ isSuccess, data, errors }`, with correct HTTP status codes.** This includes validation failures (400) and unhandled exceptions (500).

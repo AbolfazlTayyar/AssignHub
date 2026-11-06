@@ -1,6 +1,5 @@
 using AssignHub.Application.Abstractions;
 using AssignHub.Domain.Enums;
-using AssignHub.Domain.Experts;
 using AssignHub.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -38,21 +37,19 @@ internal sealed partial class AssignmentStore(
 
         for (var attempt = 0; attempt < options.Value.MaxCandidateRefreshes; attempt++)
         {
-            var candidates = ExpertSelector.Order(
-                await LoadCandidatesAsync(request.Subject, cancellationToken),
-                request.Subject);
+            var candidates = await LoadCandidateIdsAsync(request.Subject, cancellationToken);
 
             if (candidates.Count == 0)
             {
                 return TryAssignResult.NoCandidate;
             }
 
-            foreach (var expert in candidates)
+            foreach (var expertId in candidates)
             {
-                switch (await ClaimAsync(requestId, expert.Id, request.Subject, cancellationToken))
+                switch (await ClaimAsync(requestId, expertId, request.Subject, cancellationToken))
                 {
                     case ClaimOutcome.Assigned:
-                        return TryAssignResult.Assigned(expert.Id);
+                        return TryAssignResult.Assigned(expertId);
                     case ClaimOutcome.RequestTaken:
                         return TryAssignResult.AlreadyHandled;
                 }
@@ -144,30 +141,25 @@ internal sealed partial class AssignmentStore(
             .ToListAsync(cancellationToken);
     }
 
-    private async Task<IReadOnlyList<ExpertSnapshot>> LoadCandidatesAsync(
+    // SPEC §5.5. SQL applies the §5.2 order (the same order as ExpertSelector) and returns only the top
+    // K, so the cost does not grow with the number of eligible experts. The decimal ratio sorts exactly:
+    // Capacity ≤ 1000, so distinct ratios differ by at least ~1e-6, far above the division's scale, and
+    // equal ratios produce identical values. NULL LastAssignedAt sorts first in SQL Server.
+    private async Task<IReadOnlyList<int>> LoadCandidateIdsAsync(
         Subject subject,
-        CancellationToken cancellationToken)
-    {
-        var rows = await db.Experts
+        CancellationToken cancellationToken) =>
+        await db.Experts
             .AsNoTracking()
             .Where(e => e.IsActive
                 && e.OpenCount < e.Capacity
                 && e.Specialties.Any(s => s.Subject == subject))
-            .Select(e => new
-            {
-                e.Id,
-                e.Capacity,
-                e.OpenCount,
-                e.IsActive,
-                e.LastAssignedAt,
-                Specialties = e.Specialties.Select(s => s.Subject).ToList(),
-            })
+            .OrderBy(e => (decimal)e.OpenCount / e.Capacity)
+            .ThenByDescending(e => e.Capacity - e.OpenCount)
+            .ThenBy(e => e.LastAssignedAt)
+            .ThenBy(e => e.Id)
+            .Take(options.Value.CandidatePoolSize)
+            .Select(e => e.Id)
             .ToListAsync(cancellationToken);
-
-        return rows
-            .Select(r => new ExpertSnapshot(r.Id, r.Capacity, r.OpenCount, r.IsActive, r.LastAssignedAt, r.Specialties))
-            .ToList();
-    }
 
     private async Task<ClaimOutcome> ClaimAsync(
         int requestId,

@@ -127,6 +127,12 @@ internal sealed class ServiceHarness : IAsyncDisposable
             .Where(e => e.Id == expertId)
             .ExecuteUpdateAsync(s => s.SetProperty(e => e.OpenCount, openCount), cancellationToken));
 
+    // Test setup only, like SetOpenCountAsync.
+    public Task<int> SetLastAssignedAtAsync(int expertId, DateTime? lastAssignedAt, CancellationToken cancellationToken) =>
+        DbAsync(db => db.Experts
+            .Where(e => e.Id == expertId)
+            .ExecuteUpdateAsync(s => s.SetProperty(e => e.LastAssignedAt, lastAssignedAt), cancellationToken));
+
     public Task AssertCountersConsistentAsync(CancellationToken cancellationToken) =>
         DbAsync(async db =>
         {

@@ -5,4 +5,6 @@ public sealed class AssignmentOptions
     public const string SectionName = "Assignment";
 
     public int MaxCandidateRefreshes { get; set; } = 3;
+
+    public int CandidatePoolSize { get; set; } = 10;
 }

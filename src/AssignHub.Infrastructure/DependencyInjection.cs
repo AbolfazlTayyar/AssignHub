@@ -31,6 +31,7 @@ public static class DependencyInjection
         services.AddOptions<AssignmentOptions>()
             .Bind(configuration.GetSection(AssignmentOptions.SectionName))
             .Validate(o => o.MaxCandidateRefreshes >= 1, "Assignment:MaxCandidateRefreshes must be at least 1.")
+            .Validate(o => o.CandidatePoolSize >= 1, "Assignment:CandidatePoolSize must be at least 1.")
             .ValidateOnStart();
 
         services.AddScoped<DatabaseInitializer>();
