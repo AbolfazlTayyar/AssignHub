@@ -18,6 +18,7 @@ public sealed partial class QueueDrainer(
     // SPEC §7.4.
     public async Task DrainAsync(IReadOnlyCollection<Subject> subjects, CancellationToken cancellationToken)
     {
+        // Set of subjects with no available experts
         var exhausted = new HashSet<Subject>();
 
         while (true)
